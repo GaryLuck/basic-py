@@ -1,0 +1,6 @@
+
+10 LET C= 50
+20 LET D =50
+30 LET E = 50 
+40 PRINT C+D+E
+50 END

@@ -1,0 +1,5 @@
+
+10 LET AA = 5
+20 LET A = 
+30 PRINT "Done"
+40 END

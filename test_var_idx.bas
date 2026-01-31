@@ -1,0 +1,6 @@
+
+10 DIM A(5)
+20 LET I = 2
+30 LET A(I) = 99
+40 PRINT A(2)
+50 END

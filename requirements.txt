@@ -3,7 +3,7 @@ The language should support arithmetic expressions, variables, and control flow 
 The interpreter should be able to execute a program written in this language.  
 The interpreter should be limited to integer arithmetic and should support the following commands:
 
-PRINT	Print the value of an expression
+PRINT	Print a comma separated list of values, and string constants in quotes.
 LET	Assign a value to a variable
 GOTO	Jump to a line number
 IF	Conditional jump

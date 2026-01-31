@@ -128,7 +128,8 @@ class TinyBasicInterpreter:
                     # Requirement says "Conditional jump".
                     # Let's look for THEN (standard) or just GOTO implied?
                     # "IF Conditional jump" usually implies "IF condition THEN line"
-                    match = re.match(r'(.+?)\s+THEN\s+(.+)', arg, re.IGNORECASE)
+                    # We also allow "THEN GOTO line" or "GOTO line" for robustness
+                    match = re.match(r'(.+?)\s+(?:THEN\s+(?:GOTO\s+)?|GOTO\s+)(.+)', arg, re.IGNORECASE)
                     if match:
                         condition_str = match.group(1)
                         target_str = match.group(2)
@@ -172,6 +173,7 @@ class TinyBasicInterpreter:
         self.execute_program()
 
     def cmd_save(self, filename):
+        filename = filename.strip()
         if not filename:
             print("Usage: SAVE filename")
             return
@@ -184,6 +186,7 @@ class TinyBasicInterpreter:
             print(f"Error saving: {e}")
 
     def cmd_load(self, filename):
+        filename = filename.strip()
         if not filename:
             print("Usage: LOAD filename")
             return
@@ -197,51 +200,86 @@ class TinyBasicInterpreter:
             print(f"Error loading: {e}")
 
     def cmd_print(self, arg):
-        # arg can be list of expressions separated by comma
-        # But requirement says "Print the value of AN expression".
-        # Let's support one expression first, or multiple if possible.
-        # "PRINT Print the value of an expression" -> SINGULAR.
-        # But commonly we might want multiple. Let's stick to one or string.
-        # Actually standard BASIC print can take strings too.
-        # Let's try to evaluate as expression first.
-        # If it fails, maybe it's a string literal? Requirement only says "arithmetic expressions".
-        # But usually PRINT "HELLO" is expected.
-        val = self.eval_expression(arg)
-        print(val)
+        # arg can be list of expressions separated by comma, and string constants in quotes.
+        # Example: PRINT "Sum is", A+B
+        
+        if not arg:
+            print()
+            return
+            
+        # Split by comma, but ignore commas inside quotes.
+        # We can use a regex to match either a quoted string or a non-quoted segment (excl comma), followed by comma or end.
+        # Alternatively, use re.split with lookahead.
+        # The pattern `,(?=(?:[^"]*"[^"]*")*[^"]*$)` splits by comma only if followed by even number of quotes.
+        try:
+            parts = re.split(r',(?=(?:[^"]*"[^"]*")*[^"]*$)', arg)
+        except Exception:
+            # Fallback if regex fails (e.g. unbalanced quotes), just treat as whole
+            parts = [arg]
+
+        values = []
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+            
+            # Check for string constant
+            if part.startswith('"') and part.endswith('"'):
+                # String literal: remove quotes
+                values.append(part[1:-1])
+            else:
+                # Expression
+                try:
+                    val = self.eval_expression(part)
+                    values.append(str(val))
+                except Exception as e:
+                    values.append(f"Error(<{part}>)")
+        print("\t".join(values))
 
     def cmd_let(self, arg):
         # LET A = expression
-        if '=' not in arg:
-            print("Syntax error: LET var = expression")
-            return
-        var_part, expr_part = arg.split('=', 1)
-        var_name = var_part.strip().upper()
+        # Parsing using regex for better robustness
+        # Supports: A = expr, A(idx) = expr
         
-        val = self.eval_expression(expr_part)
+        arg = arg.strip()
         
-        # Check if array or simple var
-        # Variables keys are single letters.
-        # Arrays are A-Z too but index access.
+        # Match 'VAR = EXPR' or 'VAR(IDX) = EXPR'
+        # VAR is single letter A-Z
         
-        # Regex to check for array assignment: A(expr)
-        match_arr = re.match(r'^([A-Z])\((.+)\)$', var_name)
-        if match_arr:
-            # Array assignment
-            name = match_arr.group(1)
-            idx_expr = match_arr.group(2)
-            idx = self.eval_expression(idx_expr)
-            if name in self.arrays:
-                if 0 <= idx < len(self.arrays[name]):
-                    self.arrays[name][idx] = val
+        # Pattern:
+        # ^([A-Z])          -> Group 1: Variable Name (single letter)
+        # (?:\((.+)\))?     -> Group 2: Optional Index (inside parens)
+        # \s*=\s*           -> Equals sign with optional spaces
+        # (.+)              -> Group 3: Expression
+        
+        match = re.match(r'^([A-Z])(?:\((.+)\))?\s*=\s*(.+)$', arg, re.IGNORECASE)
+        
+        if not match:
+             print(f"Syntax error in LET: {arg}")
+             return
+
+        var_name = match.group(1).upper()
+        idx_expr = match.group(2)
+        val_expr = match.group(3)
+        
+        try:
+            val = self.eval_expression(val_expr)
+            
+            if idx_expr:
+                # Array assignment
+                idx = self.eval_expression(idx_expr)
+                if var_name in self.arrays:
+                    if 0 <= idx < len(self.arrays[var_name]):
+                        self.arrays[var_name][idx] = val
+                    else:
+                        print(f"Runtime error: Array index out of bounds {var_name}({idx})")
                 else:
-                    raise RuntimeError(f"Array index out of bounds: {name}({idx})")
+                    print(f"Runtime error: Array not defined {var_name}")
             else:
-                 raise RuntimeError(f"Array not defined: {name}")
-        elif re.match(r'^[A-Z]$', var_name):
-            # Simple variable
-            self.variables[var_name] = val
-        else:
-             raise RuntimeError(f"Invalid variable name: {var_name}")
+                # Scalar assignment
+                self.variables[var_name] = val
+        except Exception as e:
+            print(f"Error evaluating LET: {e}")
 
     def cmd_dim(self, arg):
         # DIM A(10)
@@ -291,36 +329,22 @@ class TinyBasicInterpreter:
         if not expr_str:
             return 0
             
-        # Pre-process: replace / with // for integer division
-        # This is a bit naive if encoded in strings but we supposedly only have vars and numbers.
-        # Be careful not to replace inside variable names? Variables are single letters.
+        # Replacements for BASIC compatibility
+        # Power
+        expr_str = expr_str.replace('^', '**')
+        # Mod parsing - usually MOD operator, or maybe valid in eval?  
+        # Eval doesn't know MOD.
+        expr_str = expr_str.replace(' MOD ', '%')
+        
+        # Integer division
         expr_str = expr_str.replace('/', '//')
+        
+        # Relational for expression context (optional but helpful)
+        expr_str = expr_str.replace('<>', '!=')
 
         # To handle arrays efficiently for eval:
         # We can pass a class/dict that handles getitem.
         
-        class Context:
-            def __init__(self, output, arrays):
-                self.output = output
-                self.arrays = arrays
-            def __getitem__(self, key):
-                if key in self.output:
-                    return self.output[key]
-                # Check directly in arrays if possible? 
-                # eval will look up names. 'A' is 0. 'A(1)' attempts to call 'A'.
-                # In Python, '0(1)' is error.
-                # So if A is a variable (int) we can't treat it as function.
-                # The requirements separate Variables A-Z and Arrays DIM A-Z.
-                # Usually in BASIC, DIM A(10) shadowing A is allowed or A is array only?
-                # "Variables are single letters A-Z... DIM Declare an array...".
-                # Often in Tiny BASIC, a letter is either a scalar or an array.
-                # Lets assume if DIM A(10) is called, A becomes an array (list).
-                
-                # Wait, my variables dict initializes all A-Z to 0. 
-                # If DIM A(10) happens, I put it in self.arrays['A'].
-                # I should probably unify storage.
-                return 0
-
         # Let's unify storage?
         # Requirement: "Variables are single letters A-Z and are initialized to 0."
         # Requirement: "DIM Declare an array..."

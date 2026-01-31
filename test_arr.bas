@@ -1,0 +1,6 @@
+
+10 DIM A(2)
+20 LET A(0) = 5
+30 LET A(1) = A(0) * 2
+40 PRINT A(1)
+50 END
